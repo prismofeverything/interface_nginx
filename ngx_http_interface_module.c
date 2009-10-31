@@ -43,6 +43,36 @@ void ngx_http_script_interface_value_code(ngx_http_script_engine_t *e);
 void ngx_http_script_interface_var_set_handler_code(ngx_http_script_engine_t *e);
 
 
+void 
+hex_transform(unsigned char * pre, unsigned char * post) {
+    u_char hex[3];
+    int i;
+    for (i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        sprintf((char *) hex, "%02x", pre[i]);
+
+        if (i == 0) {
+            strcpy((char *) post, (char *) hex);
+        } else {
+            strcat((char *) post, (char *) hex);
+        }
+    }
+}
+
+
+/* void  */
+/* print_data(ngx_http_script_engine_t *e, u_char * buf, int len) { */
+/*     u_char itwee[4]; */
+/*     u_char drep[len*4]; */
+/*     int i; */
+/*     for (i = 0; i < len; i++) { */
+/*         sprintf((char *) itwee, "%d ", buf[i]); */
+/*         strcat((char *) drep, (char *) itwee); */
+/*     } */
+/*     ngx_log_error(NGX_LOG_ALERT, e->request->connection->log, 0, */
+/*                   "%s", drep); */
+/* } */
+
+
 static ngx_command_t  ngx_http_interface_commands[] = {
 
     { ngx_string("set_md5"),
@@ -451,8 +481,20 @@ ngx_http_script_interface_complex_value_code(ngx_http_script_engine_t *e)
 
     e->pos = e->buf.data;
 
-    e->buf.data = MD5(e->buf.data, e->buf.len, NULL);
-    e->buf.len = strlen((char *) e->buf.data);
+    // begin md5 transformation
+    u_char * hex;
+    u_char * md;
+
+    md = MD5(e->buf.data, e->buf.len, NULL);
+
+/*     print_data(e, e->buf.data, e->buf.len); */
+/*     print_data(e, md, MD5_DIGEST_LENGTH); */
+
+    hex = ngx_palloc(e->request->pool, MD5_DIGEST_LENGTH*2);
+    hex_transform(md, hex);
+
+    e->buf.data = hex;
+    e->buf.len = MD5_DIGEST_LENGTH*2;
 
     e->sp->len = e->buf.len;
     e->sp->data = e->buf.data;
