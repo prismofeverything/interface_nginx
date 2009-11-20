@@ -11,8 +11,6 @@
 
 #define ngx_http_script_exit  (u_char *) &ngx_http_script_exit_code
 
-static uintptr_t ngx_http_script_exit_code = (uintptr_t) NULL;
-
 typedef struct {
     ngx_array_t  *codes;        /* uintptr_t */
 
@@ -38,6 +36,7 @@ static char * ngx_http_interface_value(ngx_conf_t *cf,
     ngx_http_rewrite_loc_conf_t *lcf, ngx_str_t *value);
 
 
+void ngx_http_script_interface_set_var_code(ngx_http_script_engine_t *e);
 void ngx_http_script_interface_complex_value_code(ngx_http_script_engine_t *e);
 void ngx_http_script_interface_value_code(ngx_http_script_engine_t *e);
 void ngx_http_script_interface_var_set_handler_code(ngx_http_script_engine_t *e);
@@ -57,20 +56,6 @@ hex_transform(unsigned char * pre, unsigned char * post) {
         }
     }
 }
-
-
-/* void  */
-/* print_data(ngx_http_script_engine_t *e, u_char * buf, int len) { */
-/*     u_char itwee[4]; */
-/*     u_char drep[len*4]; */
-/*     int i; */
-/*     for (i = 0; i < len; i++) { */
-/*         sprintf((char *) itwee, "%d ", buf[i]); */
-/*         strcat((char *) drep, (char *) itwee); */
-/*     } */
-/*     ngx_log_error(NGX_LOG_ALERT, e->request->connection->log, 0, */
-/*                   "%s", drep); */
-/* } */
 
 
 static ngx_command_t  ngx_http_interface_commands[] = {
@@ -286,35 +271,6 @@ ngx_http_interface_init(ngx_conf_t *cf)
 
 
 static char *
-ngx_http_interface_variable(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
-    ngx_str_t *value)
-{
-    ngx_int_t                    index;
-    ngx_http_script_var_code_t  *var_code;
-
-    value->len--;
-    value->data++;
-
-    index = ngx_http_get_variable_index(cf, value);
-
-    if (index == NGX_ERROR) {
-        return NGX_CONF_ERROR;
-    }
-
-    var_code = ngx_http_script_start_code(cf->pool, &lcf->codes,
-                                          sizeof(ngx_http_script_var_code_t));
-    if (var_code == NULL) {
-        return NGX_CONF_ERROR;
-    }
-
-    var_code->code = ngx_http_script_var_code;
-    var_code->index = index;
-
-    return NGX_CONF_OK;
-}
-
-
-static char *
 ngx_http_interface_set(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_http_rewrite_loc_conf_t  *lcf = conf;
@@ -366,7 +322,7 @@ ngx_http_interface_set(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             return NGX_CONF_ERROR;
         }
 
-        vhcode->code = ngx_http_script_interface_var_set_handler_code;
+        vhcode->code = ngx_http_script_var_set_handler_code;
         vhcode->handler = v->set_handler;
         vhcode->data = v->data;
 
@@ -379,11 +335,50 @@ ngx_http_interface_set(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-    vcode->code = ngx_http_script_set_var_code;
+    vcode->code = ngx_http_script_interface_set_var_code;
     vcode->index = (uintptr_t) index;
 
     return NGX_CONF_OK;
 }
+
+
+void
+ngx_http_script_interface_set_var_code(ngx_http_script_engine_t *e)
+{
+    ngx_http_request_t          *r;
+    ngx_http_script_var_code_t  *code;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
+                   "http script set var");
+
+    code = (ngx_http_script_var_code_t *) e->ip;
+
+    e->ip += sizeof(ngx_http_script_var_code_t);
+
+    r = e->request;
+
+    e->sp--;
+
+    // begin md5 transformation
+    u_char * hex;
+    u_char * md;
+
+    md = MD5(e->sp->data, e->sp->len, NULL);
+
+    hex = ngx_palloc(e->request->pool, MD5_DIGEST_LENGTH*2);
+    hex_transform(md, hex);
+
+    e->buf.data = hex;
+    e->buf.len = MD5_DIGEST_LENGTH*2;
+
+    // set the variable to the new md5 hex value
+    r->variables[code->index].len = MD5_DIGEST_LENGTH*2;
+    r->variables[code->index].valid = 1;
+    r->variables[code->index].no_cacheable = 0;
+    r->variables[code->index].not_found = 0;
+    r->variables[code->index].data = hex;
+}
+
 
 
 static char *
@@ -410,7 +405,7 @@ ngx_http_interface_value(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
             n = 0;
         }
 
-        val->code = ngx_http_script_interface_value_code;
+        val->code = ngx_http_script_value_code;
         val->value = (uintptr_t) n;
         val->text_len = (uintptr_t) value->len;
         val->text_data = (uintptr_t) value->data;
@@ -424,7 +419,7 @@ ngx_http_interface_value(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
         return NGX_CONF_ERROR;
     }
 
-    complex->code = ngx_http_script_interface_complex_value_code;
+    complex->code = ngx_http_script_complex_value_code;
     complex->lengths = NULL;
 
     ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
@@ -441,106 +436,5 @@ ngx_http_interface_value(ngx_conf_t *cf, ngx_http_rewrite_loc_conf_t *lcf,
     }
 
     return NGX_CONF_OK;
-}
-
-void
-ngx_http_script_interface_complex_value_code(ngx_http_script_engine_t *e)
-{
-    size_t                                 len;
-    ngx_http_script_engine_t               le;
-    ngx_http_script_len_code_pt            lcode;
-    ngx_http_script_complex_value_code_t  *code;
-
-    code = (ngx_http_script_complex_value_code_t *) e->ip;
-
-    e->ip += sizeof(ngx_http_script_complex_value_code_t);
-
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
-                   "http script complex value");
-
-    ngx_memzero(&le, sizeof(ngx_http_script_engine_t));
-
-    le.ip = code->lengths->elts;
-    le.line = e->line;
-    le.request = e->request;
-    le.captures = e->captures;
-    le.ncaptures = e->ncaptures;
-    le.quote = e->quote;
-
-    for (len = 0; *(uintptr_t *) le.ip; len += lcode(&le)) {
-        lcode = *(ngx_http_script_len_code_pt *) le.ip;
-    }
-
-    e->buf.len = len;
-    e->buf.data = ngx_palloc(e->request->pool, len);
-    if (e->buf.data == NULL) {
-        e->ip = ngx_http_script_exit;
-        e->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
-        return;
-    }
-
-    e->pos = e->buf.data;
-
-    // begin md5 transformation
-    u_char * hex;
-    u_char * md;
-
-    md = MD5(e->buf.data, e->buf.len, NULL);
-
-/*     print_data(e, e->buf.data, e->buf.len); */
-/*     print_data(e, md, MD5_DIGEST_LENGTH); */
-
-    hex = ngx_palloc(e->request->pool, MD5_DIGEST_LENGTH*2);
-    hex_transform(md, hex);
-
-    e->buf.data = hex;
-    e->buf.len = MD5_DIGEST_LENGTH*2;
-
-    e->sp->len = e->buf.len;
-    e->sp->data = e->buf.data;
-    e->sp++;
-}
-
-
-void
-ngx_http_script_interface_value_code(ngx_http_script_engine_t *e)
-{
-    ngx_http_script_value_code_t  *code;
-
-    code = (ngx_http_script_value_code_t *) e->ip;
-
-    e->ip += sizeof(ngx_http_script_value_code_t);
-
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
-                   "http script value: \"%v\"", e->sp);
-
-/*     code->text_data = MD5(code->text_data, code->text_len, NULL); */
-/*     code->text_len = strlen((char *) code->text_data); */
-
-    e->sp->len = code->text_len;
-    e->sp->data = (u_char *) code->text_data;
-
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
-                   "http script value: \"%v\"", e->sp);
-
-    e->sp++;
-}
-
-
-void
-ngx_http_script_interface_var_set_handler_code(ngx_http_script_engine_t *e)
-{
-    ngx_http_script_var_handler_code_t  *code;
-
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, e->request->connection->log, 0,
-                   "http script set var handler");
-
-    code = (ngx_http_script_var_handler_code_t *) e->ip;
-
-    e->ip += sizeof(ngx_http_script_var_handler_code_t);
-
-    e->sp--;
-
-    code->handler(e->request, e->sp, code->data);
 }
 
